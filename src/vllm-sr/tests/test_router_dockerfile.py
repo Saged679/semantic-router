@@ -4,7 +4,10 @@ import re
 import subprocess
 from pathlib import Path
 
-import tomllib
+try:  # Python 3.11 and later parse TOML in the standard library.
+    import tomllib
+except ImportError:  # Python 3.10 reads it through the backport the package declares.
+    import tomli as tomllib
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 ROUTER_DOCKERFILE = REPO_ROOT / "tools" / "docker" / "Dockerfile.extproc"
