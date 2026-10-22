@@ -1379,8 +1379,7 @@ routing:
         - type: request_params
           configuration:
             blocked_params:
-              - logprobs
-              - top_logprobs
+              - verbosity
             default_max_tokens: 4096
             max_tokens_limit: 8192
             max_n: 4

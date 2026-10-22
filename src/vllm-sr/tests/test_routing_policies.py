@@ -112,6 +112,23 @@ def test_request_params_default_is_optional_and_discoverable(value):
     ]
 
 
+# A name the Router cannot block is ignored at dispatch, so the configuration
+# is refused rather than carrying a policy that cannot apply.
+@pytest.mark.parametrize(
+    "name", ["logprobs", "top_logprobs", "max_token", "model", "messages"]
+)
+def test_request_params_refuses_a_blocked_param_the_router_cannot_block(name):
+    with pytest.raises(ValidationError):
+        RequestParamsPluginConfig(blocked_params=[name])
+
+
+@pytest.mark.parametrize(
+    "name", ["verbosity", "text.verbosity", "stream_options", "user", "temperature"]
+)
+def test_request_params_accepts_a_blockable_param(name):
+    assert RequestParamsPluginConfig(blocked_params=[name]).blocked_params == [name]
+
+
 def _request_params_config(value, *, named=True):
     routing = {
         "decisions": [

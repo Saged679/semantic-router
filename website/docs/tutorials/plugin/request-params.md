@@ -7,7 +7,7 @@
 ## Key Advantages
 
 - Caps expensive parameters (`max_tokens`, `n`) per route.
-- Blocks sensitive parameters such as `logprobs` / `top_logprobs` for tiers that should not expose token distributions.
+- Blocks request parameters such as `verbosity` for tiers that must not carry them.
 - Optionally strips unknown top-level JSON fields to reduce surprise passthrough behavior.
 - Can remove a client `prompt_cache_key` with `blocked_params: [prompt_cache_key]` before backend dispatch.
 
@@ -17,7 +17,7 @@ Model routing can restrict which backend serves a request, but clients can still
 
 ## When to Use
 
-- a tier or route must not request logprobs or multiple completions
+- a tier or route must not carry a request parameter the backend should not see
 - you need a hard ceiling on `max_tokens` or `n` independent of client input
 - unknown JSON fields should not be forwarded to backends
 
@@ -30,8 +30,7 @@ plugins:
   - type: request_params
     configuration:
       blocked_params:
-        - logprobs
-        - top_logprobs
+        - verbosity
       max_tokens_limit: 500
       max_n: 1
       strip_unknown: true
@@ -41,12 +40,18 @@ In DSL, the same plugin can appear as:
 
 ```dsl
 PLUGIN request_params {
-  blocked_params: ["logprobs", "top_logprobs"]
+  blocked_params: ["verbosity"]
   max_tokens_limit: 500
   max_n: 1
   strip_unknown: true
 }
 ```
+
+A `blocked_params` entry names a request field the Router forwards, in the name
+the client sends. A name the Router cannot block is refused when the
+configuration loads, so a policy never looks applied while the parameter still
+reaches the backend. Fields the Router refuses outright, such as `logprobs`,
+never reach this plugin: the codec rejects a request that carries them.
 
 This plugin enforces a bounded set of OpenAI Chat Completions fields. It is not
 a general JSON-schema firewall and does not authorize a caller. Test

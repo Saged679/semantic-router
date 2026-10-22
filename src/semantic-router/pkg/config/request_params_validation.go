@@ -1,6 +1,11 @@
 package config
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+
+	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/llmprotocol"
+)
 
 func ValidateRequestParamsPluginConfig(cfg *RequestParamsPluginConfig) error {
 	if cfg == nil {
@@ -21,6 +26,17 @@ func ValidateRequestParamsPluginConfig(cfg *RequestParamsPluginConfig) error {
 	}
 	if cfg.MaxN != nil && *cfg.MaxN <= 0 {
 		return fmt.Errorf("max_n must be positive, got %d", *cfg.MaxN)
+	}
+	// A name the Router cannot block would be ignored at dispatch, so the
+	// policy would look applied while the parameter still reaches the backend.
+	for _, field := range cfg.BlockedParams {
+		name := strings.TrimSpace(field)
+		if name == "" {
+			continue
+		}
+		if !llmprotocol.BlockableRequestField(name) {
+			return fmt.Errorf("blocked_params: %q names no request field the Router can block", name)
+		}
 	}
 	return nil
 }

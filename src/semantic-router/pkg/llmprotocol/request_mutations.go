@@ -1,6 +1,9 @@
 package llmprotocol
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // DefaultOutputTokens supplies policy only when the caller has no effective
 // output bound. Model capacity metadata is never a provider default.
@@ -42,106 +45,156 @@ func CapCandidateCount(request *Request, limit *int) bool {
 	return true
 }
 
+// requestBlockers maps every request field a policy may block to the removal
+// of that field. The keys are the names the client sends, so the map is the
+// whole vocabulary a `blocked_params` entry may use.
+var requestBlockers = map[string]func(*Request) bool{
+	"frequency_penalty": func(r *Request) bool { return clearFloat(&r.Sampling.FrequencyPenalty) },
+	"presence_penalty":  func(r *Request) bool { return clearFloat(&r.Sampling.PresencePenalty) },
+	"max_tokens":        func(r *Request) bool { return clearInt(&r.Sampling.MaxOutputTokens) },
+	"max_completion_tokens": func(r *Request) bool {
+		return clearInt(&r.Sampling.MaxOutputTokens)
+	},
+	"max_output_tokens": func(r *Request) bool { return clearInt(&r.Sampling.MaxOutputTokens) },
+	"n":                 func(r *Request) bool { return clearInt(&r.CandidateCount) },
+	"candidate_count":   func(r *Request) bool { return clearInt(&r.CandidateCount) },
+	"response_format":   func(r *Request) bool { return clearOutputFormat(&r.OutputFormat) },
+	"output_format":     func(r *Request) bool { return clearOutputFormat(&r.OutputFormat) },
+	"seed":              func(r *Request) bool { return clearInt(&r.Sampling.Seed) },
+	"stop":              func(r *Request) bool { return clearStop(&r.Sampling.Stop) },
+	"temperature":       func(r *Request) bool { return clearFloat(&r.Sampling.Temperature) },
+	"top_p":             func(r *Request) bool { return clearFloat(&r.Sampling.TopP) },
+	"min_p":             func(r *Request) bool { return clearFloat(&r.Sampling.MinP) },
+	"repetition_penalty": func(r *Request) bool {
+		return clearFloat(&r.Sampling.RepetitionPenalty)
+	},
+	"cache_salt":       func(r *Request) bool { return clearStringPointer(&r.CacheSalt) },
+	"prompt_cache_key": func(r *Request) bool { return clearString(&r.PromptCacheKey) },
+	"top_k":            func(r *Request) bool { return clearInt(&r.Sampling.TopK) },
+	"tools":            func(r *Request) bool { return clearTools(&r.Tools) },
+	"tool_choice":      func(r *Request) bool { return clearToolChoice(&r.ToolChoice) },
+	"parallel_tool_calls": func(r *Request) bool {
+		return clearBool(&r.ParallelToolCalls)
+	},
+	"reasoning_effort":        func(r *Request) bool { return clearString(&r.ReasoningEffort) },
+	"reasoning_budget_tokens": func(r *Request) bool { return clearInt(&r.ReasoningBudgetTokens) },
+	"metadata":                func(r *Request) bool { return clearMetadata(&r.Metadata) },
+	"store":                   func(r *Request) bool { return clearBool(&r.Store) },
+	"stream":                  func(r *Request) bool { return clearStream(&r.Stream) },
+	"verbosity":               func(r *Request) bool { return clearString(&r.TextVerbosity) },
+	"text.verbosity":          func(r *Request) bool { return clearString(&r.TextVerbosity) },
+	"text_verbosity":          func(r *Request) bool { return clearString(&r.TextVerbosity) },
+	"stream_options": func(r *Request) bool {
+		changed := r.StreamOptions.IncludeUsage != nil || r.StreamOptions.IncludeObfuscation != nil
+		r.StreamOptions = StreamOptions{}
+		return changed
+	},
+	"user":       func(r *Request) bool { return clearString(&r.EndUserID) },
+	"truncation": func(r *Request) bool { return clearString(&r.Truncation) },
+	"previous_response_id": func(r *Request) bool {
+		return clearString(&r.PreviousResponseID)
+	},
+	"conversation":      func(r *Request) bool { return clearString(&r.ConversationID) },
+	"conversation_id":   func(r *Request) bool { return clearString(&r.ConversationID) },
+	"auto_store":        func(r *Request) bool { return clearBool(&r.AutoStore) },
+	"reasoning.summary": func(r *Request) bool { return clearString(&r.ReasoningSummary) },
+	"reasoning_summary": func(r *Request) bool { return clearString(&r.ReasoningSummary) },
+	"reasoning.display": func(r *Request) bool { return clearString(&r.ReasoningDisplay) },
+	"reasoning_display": func(r *Request) bool { return clearString(&r.ReasoningDisplay) },
+}
+
+func clearFloat(value **float64) bool {
+	changed := *value != nil
+	*value = nil
+	return changed
+}
+
+func clearInt(value **int64) bool {
+	changed := *value != nil
+	*value = nil
+	return changed
+}
+
+func clearBool(value **bool) bool {
+	changed := *value != nil
+	*value = nil
+	return changed
+}
+
+func clearString(value *string) bool {
+	changed := *value != ""
+	*value = ""
+	return changed
+}
+
+func clearStringPointer(value **string) bool {
+	changed := *value != nil
+	*value = nil
+	return changed
+}
+
+func clearStop(value *[]string) bool {
+	changed := len(*value) > 0
+	*value = nil
+	return changed
+}
+
+func clearTools(value *[]Tool) bool {
+	changed := len(*value) > 0
+	*value = nil
+	return changed
+}
+
+func clearMetadata(value *map[string]string) bool {
+	changed := len(*value) > 0
+	*value = nil
+	return changed
+}
+
+func clearOutputFormat(value *OutputFormat) bool {
+	changed := value.Kind != ""
+	*value = OutputFormat{}
+	return changed
+}
+
+func clearToolChoice(value *ToolChoice) bool {
+	changed := value.Mode != "" || value.Name != ""
+	*value = ToolChoice{}
+	return changed
+}
+
+func clearStream(value *bool) bool {
+	changed := *value
+	*value = false
+	return changed
+}
+
 // BlockRequestField removes a named optional field from the neutral request.
 //
-//nolint:cyclop,funlen // Blocking is an exhaustive mapping of the public request-parameter vocabulary.
+// A name the Router does not model names no field, so it removes nothing: a
+// policy that names one is refused when the configuration loads, not here.
 func BlockRequestField(request *Request, field string) (bool, error) {
 	switch field {
 	case "":
 		return false, nil
 	case "model", "messages":
 		return false, fmt.Errorf("required semantic field %q cannot be blocked", field)
-	case "frequency_penalty":
-		changed := request.Sampling.FrequencyPenalty != nil
-		request.Sampling.FrequencyPenalty = nil
-		return changed, nil
-	case "presence_penalty":
-		changed := request.Sampling.PresencePenalty != nil
-		request.Sampling.PresencePenalty = nil
-		return changed, nil
-	case "max_tokens", "max_completion_tokens", "max_output_tokens":
-		changed := request.Sampling.MaxOutputTokens != nil
-		request.Sampling.MaxOutputTokens = nil
-		return changed, nil
-	case "n", "candidate_count":
-		changed := request.CandidateCount != nil
-		request.CandidateCount = nil
-		return changed, nil
-	case "response_format", "output_format":
-		changed := request.OutputFormat.Kind != ""
-		request.OutputFormat = OutputFormat{}
-		return changed, nil
-	case "seed":
-		changed := request.Sampling.Seed != nil
-		request.Sampling.Seed = nil
-		return changed, nil
-	case "stop":
-		changed := len(request.Sampling.Stop) > 0
-		request.Sampling.Stop = nil
-		return changed, nil
-	case "temperature":
-		changed := request.Sampling.Temperature != nil
-		request.Sampling.Temperature = nil
-		return changed, nil
-	case "top_p":
-		changed := request.Sampling.TopP != nil
-		request.Sampling.TopP = nil
-		return changed, nil
-	case "min_p":
-		changed := request.Sampling.MinP != nil
-		request.Sampling.MinP = nil
-		return changed, nil
-	case "repetition_penalty":
-		changed := request.Sampling.RepetitionPenalty != nil
-		request.Sampling.RepetitionPenalty = nil
-		return changed, nil
-	case "cache_salt":
-		changed := request.CacheSalt != nil
-		request.CacheSalt = nil
-		return changed, nil
-	case "prompt_cache_key":
-		changed := request.PromptCacheKey != ""
-		request.PromptCacheKey = ""
-		return changed, nil
-	case "top_k":
-		changed := request.Sampling.TopK != nil
-		request.Sampling.TopK = nil
-		return changed, nil
-	case "tools":
-		changed := len(request.Tools) > 0
-		request.Tools = nil
-		return changed, nil
-	case "tool_choice":
-		changed := request.ToolChoice.Mode != "" || request.ToolChoice.Name != ""
-		request.ToolChoice = ToolChoice{}
-		return changed, nil
-	case "parallel_tool_calls":
-		changed := request.ParallelToolCalls != nil
-		request.ParallelToolCalls = nil
-		return changed, nil
-	case "reasoning_effort":
-		changed := request.ReasoningEffort != ""
-		request.ReasoningEffort = ""
-		return changed, nil
-	case "reasoning_budget_tokens":
-		changed := request.ReasoningBudgetTokens != nil
-		request.ReasoningBudgetTokens = nil
-		return changed, nil
-	case "metadata":
-		changed := len(request.Metadata) > 0
-		request.Metadata = nil
-		return changed, nil
-	case "store":
-		changed := request.Store != nil
-		request.Store = nil
-		return changed, nil
-	case "stream":
-		changed := request.Stream
-		request.Stream = false
-		return changed, nil
-	default:
-		// Unknown client fields never enter neutral IR; codecs already enforce
-		// the configured unknown-field policy at ingress.
+	}
+	blocker, ok := requestBlockers[field]
+	if !ok {
 		return false, nil
 	}
+	return blocker(request), nil
+}
+
+// BlockableRequestField reports whether a policy may block the named field.
+// It answers with the same vocabulary BlockRequestField implements, so the
+// configuration validation and the plugin agree on what a name means.
+func BlockableRequestField(field string) bool {
+	switch strings.TrimSpace(field) {
+	case "", "model", "messages":
+		return false
+	}
+	_, ok := requestBlockers[strings.TrimSpace(field)]
+	return ok
 }

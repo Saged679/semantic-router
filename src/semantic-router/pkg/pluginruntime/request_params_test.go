@@ -29,3 +29,27 @@ func TestRequestParamsBlocksPromptCacheKey(t *testing.T) {
 		t.Fatalf("request params did not block prompt_cache_key: request=%+v result=%+v", request, result)
 	}
 }
+
+// A field the Router forwards is the one a policy names, so the parameter
+// never reaches the backend.
+func TestRequestParamsBlocksTheForwardedFields(t *testing.T) {
+	usage := true
+	verbosity := "high"
+	request := &llmprotocol.Request{
+		TextVerbosity: verbosity,
+		StreamOptions: llmprotocol.StreamOptions{IncludeUsage: &usage},
+		EndUserID:     "user-1",
+	}
+	result, err := ApplyRequestParams(request, &config.RequestParamsPluginConfig{
+		BlockedParams: []string{"verbosity", "stream_options", "user"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.TextVerbosity != "" || request.StreamOptions.IncludeUsage != nil || request.EndUserID != "" {
+		t.Fatalf("request params did not block the forwarded fields: request=%+v", request)
+	}
+	if !result.Changed || len(result.Blocked) != 3 {
+		t.Fatalf("request params did not report the blocked fields: %+v", result)
+	}
+}

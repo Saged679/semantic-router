@@ -1202,6 +1202,55 @@ class FastResponsePluginConfig(BaseModel):
     message: str
 
 
+# The request fields a policy may block, in the names the client sends. It
+# mirrors the Router's BlockRequestField vocabulary: a name outside this list
+# names no field the Router can remove before dispatch.
+BLOCKABLE_REQUEST_PARAMS = frozenset(
+    {
+        "auto_store",
+        "cache_salt",
+        "candidate_count",
+        "conversation",
+        "conversation_id",
+        "frequency_penalty",
+        "max_completion_tokens",
+        "max_output_tokens",
+        "max_tokens",
+        "metadata",
+        "min_p",
+        "n",
+        "output_format",
+        "parallel_tool_calls",
+        "presence_penalty",
+        "previous_response_id",
+        "prompt_cache_key",
+        "reasoning.display",
+        "reasoning.summary",
+        "reasoning_budget_tokens",
+        "reasoning_display",
+        "reasoning_effort",
+        "reasoning_summary",
+        "repetition_penalty",
+        "response_format",
+        "seed",
+        "stop",
+        "store",
+        "stream",
+        "stream_options",
+        "temperature",
+        "text.verbosity",
+        "text_verbosity",
+        "tool_choice",
+        "tools",
+        "top_k",
+        "top_p",
+        "truncation",
+        "user",
+        "verbosity",
+    }
+)
+
+
 class RequestParamsPluginConfig(BaseModel):
     """Configuration for request_params plugin."""
 
@@ -1212,6 +1261,19 @@ class RequestParamsPluginConfig(BaseModel):
     max_tokens_limit: Optional[int] = Field(default=None, ge=1)
     max_n: Optional[int] = Field(default=None, ge=1)
     strip_unknown: Optional[bool] = None
+
+    @field_validator("blocked_params")
+    @classmethod
+    def blockable_params(cls, names):
+        # A name the Router cannot block is ignored at dispatch, so the policy
+        # would look applied while the parameter still reaches the backend.
+        for name in names or []:
+            field = (name or "").strip()
+            if field and field not in BLOCKABLE_REQUEST_PARAMS:
+                raise ValueError(
+                    f"{field!r} is not a request field the Router can block"
+                )
+        return names
 
 
 class ResponseJailbreakPluginConfig(BaseModel):
